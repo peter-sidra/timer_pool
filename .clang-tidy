@@ -1,0 +1,5 @@
+Checks: "clang-diagnostic-*,clang-analyzer-*,cppcoreguidelines-*,modernize-*,-cppcoreguidelines-avoid-magic-numbers,readability-*,-readability-magic-numbers"
+HeaderFilterRegex: ""
+AnalyzeTemporaryDtors: false
+#FormatStyle: google
+#CheckOptions:
