@@ -14,7 +14,7 @@ add_subdirectory(libs)
 
 add_library(timer_pool INTERFACE include/timer_pool.hpp)
 target_include_directories(timer_pool INTERFACE include/)
-target_link_libraries(timer_pool INTERFACE libs)
+target_link_libraries(timer_pool INTERFACE timer_pool_external_libs)
 
 add_executable(timer_pool_example examples/example1.cpp)
 target_link_libraries(timer_pool_example PRIVATE timer_pool)
