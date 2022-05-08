@@ -1,8 +1,10 @@
-#include "thread_pool.hpp"
+#include "thread_pool/thread_pool.hpp"
 #include <chrono>
 #include <functional>
 #include <queue>
 #include <utility>
+
+namespace timer_pool {
 
 class TimerPool final {
   private:
@@ -34,7 +36,7 @@ class TimerPool final {
 			// queue if this predicate is true
 			return rhs.is_higher_priority(lhs);
 		}};
-	ThreadPool &thread_pool;
+	thread_pool::ThreadPool &thread_pool;
 	std::binary_semaphore work_semaphore;
 	std::thread scheduling_thread;
 	bool terminate_pool = false;
@@ -106,7 +108,7 @@ class TimerPool final {
 	}
 
   public:
-	TimerPool(ThreadPool &thread_pool)
+	TimerPool(thread_pool::ThreadPool &thread_pool)
 		: thread_pool(thread_pool), work_semaphore(0) {
 		scheduling_thread =
 			std::thread(&TimerPool::run_scheduling_thread, this);
@@ -169,3 +171,5 @@ class TimerPool final {
 		scheduling_thread.join();
 	}
 };
+
+} // namespace timer_pool

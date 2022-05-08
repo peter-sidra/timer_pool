@@ -1,4 +1,4 @@
-#include "timer_pool.hpp"
+#include "timer_pool/timer_pool.hpp"
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -23,8 +23,8 @@ auto print(std::string_view msg) -> void {
 }
 
 auto main() -> int {
-	ThreadPool thread_pool;
-	TimerPool timer_pool{thread_pool};
+	thread_pool::ThreadPool thread_pool;
+	timer_pool::TimerPool timer_pool{thread_pool};
 
 	timer_pool.push_task_periodic(std::chrono::steady_clock::now(),
 								  std::chrono::seconds(1), print,
@@ -40,5 +40,5 @@ auto main() -> int {
 		"I run after 1 second and every 500 milliseconds");
 
 	using namespace std::chrono_literals;
-	std::this_thread::sleep_for(5s);
+	std::this_thread::sleep_for(9999999s);
 }
