@@ -12,7 +12,7 @@ endif()
 
 add_subdirectory(libs)
 
-add_library(timer_pool INTERFACE include/timer_pool.hpp)
+add_library(timer_pool INTERFACE include/timer_pool/timer_pool.hpp)
 target_include_directories(timer_pool INTERFACE include/)
 target_link_libraries(timer_pool INTERFACE timer_pool_external_libs)
 
