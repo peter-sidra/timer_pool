@@ -26,7 +26,7 @@ class TimerPool final {
 
 		auto packaged_task = std::make_shared<std::packaged_task<R()>>(
 			[task = std::forward<F>(task),
-			 ... args = std::forward<Args>(args)] { task(args...); });
+			 ... args = std::forward<Args>(args)] { return task(args...); });
 
 		auto fut = packaged_task->get_future();
 
