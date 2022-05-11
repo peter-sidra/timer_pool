@@ -7,109 +7,8 @@
 namespace timer_pool {
 
 class TimerPool final {
-  private:
-	class TimerTask {
-	  public:
-		std::function<void()> task;
-		std::chrono::steady_clock::time_point time;
-		std::optional<std::chrono::milliseconds> period;
-
-		TimerTask() = default;
-
-		TimerTask(std::function<void()> task,
-				  std::chrono::steady_clock::time_point time,
-				  std::optional<std::chrono::milliseconds> period =
-					  std::nullopt) noexcept
-			: task(std::move(task)), time(time), period(period) {}
-
-		[[nodiscard]] auto is_higher_priority(const TimerTask &other) const
-			-> bool {
-			return this->time < other.time;
-		}
-	};
-
-	std::mutex tasks_mtx;
-	std::priority_queue<TimerTask, std::vector<TimerTask>,
-						bool (*)(const TimerTask &, const TimerTask &)>
-		tasks{[](const TimerTask &lhs, const TimerTask &rhs) {
-			// The priority queue would place the rhs task at the top of the
-			// queue if this predicate is true
-			return rhs.is_higher_priority(lhs);
-		}};
-	thread_pool::ThreadPool &thread_pool;
-	std::binary_semaphore work_semaphore;
-	std::thread scheduling_thread;
-	bool terminate_pool = false;
-
-	void run_scheduling_thread() {
-		auto wait_abs_time = std::chrono::steady_clock::time_point::max();
-
-		auto is_work_ready = [this] {
-			auto task_is_ready =
-				!tasks.empty() &&
-				tasks.top().time <= std::chrono::steady_clock::now();
-			return terminate_pool || task_is_ready;
-		};
-
-		auto update_wait_abs_time = [this, &wait_abs_time] {
-			if (tasks.empty()) {
-				wait_abs_time = std::chrono::steady_clock::time_point::max();
-			} else {
-				wait_abs_time = tasks.top().time;
-			}
-		};
-
-		while (true) {
-			TimerTask timer_task;
-
-			// Check if there's work to be done
-			std::ignore = work_semaphore.try_acquire_until(wait_abs_time);
-			{
-				std::lock_guard lock{tasks_mtx};
-				if (terminate_pool) {
-					return;
-				}
-
-				// Check if there's work to be done
-				if (!is_work_ready()) {
-					update_wait_abs_time();
-					continue;
-				}
-
-				timer_task = tasks.top();
-				tasks.pop();
-
-				// Update the wait_abs_time after popping the top task
-				update_wait_abs_time();
-			}
-
-			// Push the task to be executed on the thread pool
-			thread_pool.push_task(timer_task.task);
-
-			// If the task has a period, push it back to the queue
-			if (timer_task.period.has_value()) {
-				auto new_wait_time =
-					timer_task.time + timer_task.period.value();
-
-				// Update the wait_abs_time if needed
-				wait_abs_time = std::min(wait_abs_time, new_wait_time);
-
-				{
-					std::lock_guard tasks_lock{tasks_mtx};
-					tasks.emplace(timer_task.task, new_wait_time,
-								  timer_task.period);
-				}
-			}
-		};
-	}
-
-	void notify_scheduling_thread() {
-		work_semaphore.release();
-	}
-
   public:
-	TimerPool(thread_pool::ThreadPool &thread_pool)
-		: thread_pool(thread_pool), work_semaphore(0) {
+	TimerPool(thread_pool::ThreadPool &thread_pool) : thread_pool(thread_pool) {
 		scheduling_thread =
 			std::thread(&TimerPool::run_scheduling_thread, this);
 	};
@@ -131,20 +30,17 @@ class TimerPool final {
 
 		auto fut = promise->get_future();
 
-		{
-			std::lock_guard<std::mutex> tasks_lock_guard{tasks_mtx};
-			tasks.emplace(
-				[promise = std::move(promise), task,
-				 ... args = std::forward<ArgTypes>(args)]() mutable {
-					if constexpr (std::is_same<R, void>::value) {
-						task(args...);
-						promise->set_value();
-					} else {
-						promise->set_value(task(args...));
-					}
-				},
-				time);
-		}
+		tasks.getScopedAccessor()->queue.emplace(
+			[promise = std::move(promise), task,
+			 ... args = std::forward<ArgTypes>(args)]() mutable {
+				if constexpr (std::is_same<R, void>::value) {
+					task(args...);
+					promise->set_value();
+				} else {
+					promise->set_value(task(args...));
+				}
+			},
+			time);
 
 		this->notify_scheduling_thread();
 		return fut;
@@ -154,13 +50,11 @@ class TimerPool final {
 	auto push_task_periodic(std::chrono::steady_clock::time_point time,
 							std::chrono::milliseconds period, const F &task,
 							ArgTypes... args) {
-		{
-			std::lock_guard<std::mutex> tasks_lock_guard{tasks_mtx};
-			tasks.emplace([task = std::move(task),
-						   ... args = std::forward<ArgTypes>(
-							   args)]() mutable { task(args...); },
-						  time, period);
-		}
+
+		tasks.getScopedAccessor()->queue.emplace(
+			[task = std::move(task), ... args = std::forward<ArgTypes>(
+										 args)]() mutable { task(args...); },
+			time, period);
 
 		this->notify_scheduling_thread();
 	}
@@ -169,6 +63,117 @@ class TimerPool final {
 		terminate_pool = true;
 		this->notify_scheduling_thread();
 		scheduling_thread.join();
+	}
+
+  private:
+	class TimerTask {
+	  public:
+		std::function<void()> task;
+		std::chrono::steady_clock::time_point time;
+		std::optional<std::chrono::milliseconds> period;
+
+		TimerTask() = default;
+
+		TimerTask(std::function<void()> task,
+				  std::chrono::steady_clock::time_point time,
+				  std::optional<std::chrono::milliseconds> period =
+					  std::nullopt) noexcept
+			: task(std::move(task)), time(time), period(period) {}
+
+		[[nodiscard]] auto is_higher_priority(const TimerTask &other) const
+			-> bool {
+			return this->time < other.time;
+		}
+	};
+
+	class TimerQueue {
+	  public:
+		std::priority_queue<TimerTask, std::vector<TimerTask>,
+							bool (*)(const TimerTask &, const TimerTask &)>
+			queue{[](const TimerTask &lhs, const TimerTask &rhs) {
+				// The priority queue would place the rhs task at the top of the
+				// queue if this predicate is true
+				return rhs.is_higher_priority(lhs);
+			}};
+		std::chrono::time_point<std::chrono::steady_clock> wait_time_abs =
+			std::chrono::steady_clock::time_point::max();
+
+		template <typename... Args> auto emplace_task(Args &&...args) {
+			queue.emplace(std::forward<Args>(args)...);
+			update_wait_abs_time();
+		};
+
+		auto pop_task() -> TimerTask {
+			auto result = queue.top();
+			queue.pop();
+			update_wait_abs_time();
+			return result;
+		}
+
+		[[nodiscard]] auto is_task_ready() const -> bool {
+			return !queue.empty() &&
+				   queue.top().time <= std::chrono::steady_clock::now();
+		}
+
+	  private:
+		auto update_wait_abs_time() -> void {
+			if (queue.empty()) {
+				wait_time_abs = std::chrono::steady_clock::time_point::max();
+			} else {
+				wait_time_abs = queue.top().time;
+			}
+		};
+	};
+	thread_pool::MutexWrapper<TimerQueue> tasks;
+
+	thread_pool::ThreadPool &thread_pool;
+
+	std::condition_variable work_condition_variable;
+
+	std::thread scheduling_thread;
+
+	bool terminate_pool = false;
+
+	// Lock the tasks_mtx before calling this function
+	// This insures that mutations to wait_time_abs are synced with
+	// mutations to tasks_mtx
+
+	void run_scheduling_thread() {
+		while (true) {
+			TimerTask timer_task;
+
+			// Check if there's work to be done
+			{
+				std::unique_lock lock(tasks.getMutex());
+				work_condition_variable.wait_until(
+					lock, tasks.getUnsafeAccessor().wait_time_abs, [this] {
+						return terminate_pool ||
+							   tasks.getUnsafeAccessor().is_task_ready();
+					});
+
+				if (terminate_pool) {
+					return;
+				}
+
+				timer_task = tasks.getUnsafeAccessor().pop_task();
+			}
+
+			// Push the task to be executed on the thread pool
+			thread_pool.push_task(timer_task.task);
+
+			// If the task has a period, push it back to the queue
+			if (timer_task.period.has_value()) {
+				auto new_wait_time =
+					timer_task.time + timer_task.period.value();
+
+				tasks.getScopedAccessor()->emplace_task(
+					timer_task.task, new_wait_time, timer_task.period);
+			}
+		};
+	}
+
+	void notify_scheduling_thread() {
+		work_condition_variable.notify_one();
 	}
 };
 
