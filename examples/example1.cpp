@@ -23,8 +23,12 @@ auto print(std::string_view msg) -> void {
 }
 
 auto main() -> int {
+	using namespace std::chrono_literals;
+
 	thread_pool::ThreadPool thread_pool;
 	timer_pool::TimerPool timer_pool{thread_pool};
+
+	// std::this_thread::sleep_for(5ms);
 
 	timer_pool.push_task_periodic(std::chrono::steady_clock::now(),
 								  std::chrono::seconds(1), print,
@@ -39,6 +43,9 @@ auto main() -> int {
 		std::chrono::milliseconds(500), print,
 		"I run after 1 second and every 500 milliseconds");
 
-	using namespace std::chrono_literals;
+	std::this_thread::sleep_for(3050ms);
+	timer_pool.push_task_once(std::chrono::steady_clock::now() + 100ms, print,
+							  "I run after 3.15 seconds");
+
 	std::this_thread::sleep_for(9999999s);
 }

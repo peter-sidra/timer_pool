@@ -30,7 +30,7 @@ class TimerPool final {
 
 		auto fut = promise->get_future();
 
-		tasks.getScopedAccessor()->queue.emplace(
+		tasks.getScopedAccessor()->emplace_task(
 			[promise = std::move(promise), task,
 			 ... args = std::forward<ArgTypes>(args)]() mutable {
 				if constexpr (std::is_same<R, void>::value) {
@@ -51,7 +51,7 @@ class TimerPool final {
 							std::chrono::milliseconds period, const F &task,
 							ArgTypes... args) {
 
-		tasks.getScopedAccessor()->queue.emplace(
+		tasks.getScopedAccessor()->emplace_task(
 			[task = std::move(task), ... args = std::forward<ArgTypes>(
 										 args)]() mutable { task(args...); },
 			time, period);
@@ -134,10 +134,6 @@ class TimerPool final {
 
 	bool terminate_pool = false;
 
-	// Lock the tasks_mtx before calling this function
-	// This insures that mutations to wait_time_abs are synced with
-	// mutations to tasks_mtx
-
 	void run_scheduling_thread() {
 		while (true) {
 			TimerTask timer_task;
@@ -146,13 +142,14 @@ class TimerPool final {
 			{
 				std::unique_lock lock(tasks.getMutex());
 				work_condition_variable.wait_until(
-					lock, tasks.getUnsafeAccessor().wait_time_abs, [this] {
-						return terminate_pool ||
-							   tasks.getUnsafeAccessor().is_task_ready();
-					});
+					lock, tasks.getUnsafeAccessor().wait_time_abs);
 
 				if (terminate_pool) {
 					return;
+				}
+
+				if (!tasks.getUnsafeAccessor().is_task_ready()) {
+					continue;
 				}
 
 				timer_task = tasks.getUnsafeAccessor().pop_task();
