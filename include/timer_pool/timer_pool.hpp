@@ -19,27 +19,19 @@ class TimerPool final {
 	TimerPool(TimerPool &&) = delete;
 	auto operator=(TimerPool &&) -> TimerPool & = delete;
 
-	template <typename F, typename... ArgTypes,
-			  typename R = typename std::invoke_result<F, ArgTypes...>::type>
+	template <typename F, typename... Args,
+			  typename R = typename std::invoke_result<F, Args...>::type>
 	auto push_task_once(std::chrono::steady_clock::time_point time,
-						const F &task, ArgTypes... args) -> std::future<R> {
+						const F &&task, Args &&...args) -> std::future<R> {
 
-		// https://stackoverflow.com/questions/25330716/move-only-version-of-stdfunction
-		// on why this is shared_ptr instead of unique_ptr
-		auto promise = std::make_shared<std::promise<R>>();
+		auto packaged_task = std::make_shared<std::packaged_task<R()>>(
+			[task = std::forward<F>(task),
+			 ... args = std::forward<Args>(args)] { task(args...); });
 
-		auto fut = promise->get_future();
+		auto fut = packaged_task->get_future();
 
 		tasks.getScopedAccessor()->emplace_task(
-			[promise = std::move(promise), task,
-			 ... args = std::forward<ArgTypes>(args)]() mutable {
-				if constexpr (std::is_same<R, void>::value) {
-					task(args...);
-					promise->set_value();
-				} else {
-					promise->set_value(task(args...));
-				}
-			},
+			[packaged_task = std::move(packaged_task)] { (*packaged_task)(); },
 			time);
 
 		this->notify_scheduling_thread();
@@ -48,12 +40,14 @@ class TimerPool final {
 
 	template <typename F, typename... ArgTypes>
 	auto push_task_periodic(std::chrono::steady_clock::time_point time,
-							std::chrono::milliseconds period, const F &task,
-							ArgTypes... args) {
+							std::chrono::milliseconds period, const F &&task,
+							ArgTypes &&...args) {
 
 		tasks.getScopedAccessor()->emplace_task(
-			[task = std::move(task), ... args = std::forward<ArgTypes>(
-										 args)]() mutable { task(args...); },
+			[task = std::forward<F>(task),
+			 ... args = std::forward<ArgTypes>(args)]() mutable {
+				task(args...);
+			},
 			time, period);
 
 		this->notify_scheduling_thread();
